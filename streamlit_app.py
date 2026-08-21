@@ -23,6 +23,7 @@ warnings.filterwarnings("ignore")
 import time
 import datetime
 import pandas as pd
+pd.options.mode.string_storage = "python"   # 修复：akshare个股新闻在pyarrow字符串后端下正则不兼容
 import matplotlib.pyplot as plt
 import akshare as ak
 import streamlit as st
