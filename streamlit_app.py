@@ -23,7 +23,6 @@ warnings.filterwarnings("ignore")
 import time
 import datetime
 import pandas as pd
-pd.options.mode.string_storage = "python"   # 修复：akshare个股新闻在pyarrow字符串后端下正则不兼容
 import matplotlib.pyplot as plt
 import akshare as ak
 import streamlit as st
@@ -525,26 +524,8 @@ def main():
             st.info("👈 在左侧输入股票代码，点「开始分析」")
         else:
             stock_code = stock_code.strip()
-            # 显示股票名称，方便核对有没有查错
-            name = get_stock_name(stock_code)
-            st.markdown(f"### 📋 正在分析：{name}（{stock_code}）")
 
-            # 1) 实时行情
-            rt = fetch_realtime(stock_code)
-            if rt is not None and rt.get("最新") is not None:
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("最新价", f"{safe_float(rt['最新']):.2f}", f"{safe_float(rt['涨幅']):.2f}%")
-                col2.metric("今开", f"{safe_float(rt['今开']):.2f}")
-                col3.metric("最高", f"{safe_float(rt['最高']):.2f}")
-                col4.metric("最低", f"{safe_float(rt['最低']):.2f}")
-                info = f"换手率 {rt['换手']}%"
-                if rt.get("量比") is not None:
-                    info += f" · 量比 {rt['量比']}"
-                st.caption(info)
-            else:
-                st.warning("⚠️ 实时行情暂时获取失败（网络原因），已跳过。")
-
-            # 2) 历史数据 + 指标
+            # 1) 先抓历史数据（新浪源，云端最稳定）
             start_str = start_date.strftime("%Y%m%d")
             end_str = datetime.date.today().strftime("%Y%m%d")
             with st.spinner("正在抓取历史数据……"):
@@ -554,6 +535,36 @@ def main():
             else:
                 df = add_indicators(df)
                 st.success(f"✅ 已获取 {len(df)} 条历史数据")
+
+                # 2) 名称 + 行情快照（雪球实时优先，失败用历史数据兜底）
+                name = get_stock_name(stock_code)
+                st.markdown(f"### 📋 正在分析：{name}（{stock_code}）")
+
+                rt = fetch_realtime(stock_code)
+                latest = df.iloc[-1]   # 历史数据的最新一条，用来兜底
+                if rt is not None and rt.get("最新") is not None:
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("最新价", f"{safe_float(rt['最新']):.2f}", f"{safe_float(rt['涨幅']):.2f}%")
+                    col2.metric("今开", f"{safe_float(rt['今开']):.2f}")
+                    col3.metric("最高", f"{safe_float(rt['最高']):.2f}")
+                    col4.metric("最低", f"{safe_float(rt['最低']):.2f}")
+                    info = f"换手率 {rt['换手']}%"
+                    if rt.get("量比") is not None:
+                        info += f" · 量比 {rt['量比']}"
+                    st.caption(info)
+                else:
+                    st.caption("⚠️ 实时行情暂不可用，以下为最近交易日数据（来自历史数据）：")
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("收盘价", f"{safe_float(latest['close']):.2f}", f"{safe_float(latest['pct_change']):.2f}%")
+                    col2.metric("开盘", f"{safe_float(latest['open']):.2f}")
+                    col3.metric("最高", f"{safe_float(latest['high']):.2f}")
+                    col4.metric("最低", f"{safe_float(latest['low']):.2f}")
+
+                # 3) 图表（从这里开始不变）
+                st.subheader("📊 走势与指标")
+                st.pyplot(plot_price(df, stock_code))
+                st.pyplot(plot_macd(df))
+                st.pyplot(plot_rsi(df))
 
                 st.subheader("📊 走势与指标")
                 st.pyplot(plot_price(df, stock_code))
