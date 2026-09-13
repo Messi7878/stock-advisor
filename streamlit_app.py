@@ -254,8 +254,8 @@ def technical_score(df):
 
 
 def get_stock_name(stock_code):
-    """根据股票代码查名称（从雪球查，单只股票，更快更稳）。"""
-    # 雪球需要带交易所前缀
+    """根据股票代码查名称。优先雪球，失败退东方财富个股信息。"""
+    # 方法一：雪球
     if stock_code.startswith(("60", "68")):
         xq_symbol = "SH" + stock_code
     elif stock_code.startswith(("00", "30")):
@@ -269,11 +269,21 @@ def get_stock_name(stock_code):
         df = ak.stock_individual_spot_xq(symbol=xq_symbol)
         if df is not None and not df.empty:
             data = dict(zip(df["item"], df["value"]))
-            name = data.get("名称")
-            if name:
-                return str(name)
+            if data.get("名称"):
+                return str(data["名称"])
     except Exception:
         pass
+
+    # 方法二：东方财富个股信息（云端能访问，作为备用）
+    try:
+        df = ak.stock_individual_info_em(symbol=stock_code)
+        if df is not None and not df.empty:
+            data = dict(zip(df["item"], df["value"]))
+            if data.get("股票简称"):
+                return str(data["股票简称"])
+    except Exception:
+        pass
+
     return stock_code   # 实在查不到，才返回代码本身
 
 
