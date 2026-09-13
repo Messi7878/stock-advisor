@@ -511,6 +511,48 @@ def screen_stocks(top_n=5, max_candidates=15):
 # ============================================================
 # 主界面
 # ============================================================
+def _pick_stock(code):
+    """点击自选股时，把代码填入股票代码输入框。"""
+    st.session_state.stock_code = code
+
+
+def _remove_stock(code):
+    """从自选股里删除一只。"""
+    if code in st.session_state.watchlist:
+        st.session_state.watchlist.remove(code)
+
+def backtest(df):
+    """简单均线策略回测：MA5 上穿 MA20（金叉）买入，下穿（死叉）卖出。
+    返回 (加了持仓和收益的数据表, 金叉次数, 死叉次数)。
+    """
+    df = df.copy()
+
+    # 金叉/死叉信号
+    golden = (df["MA5"].shift(1) <= df["MA20"].shift(1)) & (df["MA5"] > df["MA20"])
+    dead = (df["MA5"].shift(1) >= df["MA20"].shift(1)) & (df["MA5"] < df["MA20"])
+
+    # 持仓状态（1=持有，0=空仓）
+    position = 0
+    positions = []
+    for i in range(len(df)):
+        if golden.iloc[i]:
+            position = 1
+        elif dead.iloc[i]:
+            position = 0
+        positions.append(position)
+    df["position"] = positions
+
+    # 每日收益率
+    df["daily_ret"] = df["close"].pct_change().fillna(0)
+    df["strategy_ret"] = df["position"].shift(1).fillna(0) * df["daily_ret"]   # 策略收益
+    df["hold_ret"] = df["daily_ret"]                                           # 买入持有
+
+    # 累计净值
+    df["strategy_cum"] = (1 + df["strategy_ret"]).cumprod()
+    df["hold_cum"] = (1 + df["hold_ret"]).cumprod()
+
+    return df, int(golden.sum()), int(dead.sum())
+
 def main():
     st.title("📈 A股智能分析助手")
     st.caption("多因子参考工具 · 教学演示 · 不构成投资建议")
@@ -519,14 +561,33 @@ def main():
     with st.sidebar:
         st.header("⚙️ 参数设置")
         language = st.selectbox("语言 / Language", ["简体中文"])
-        stock_code = st.text_input("股票代码", value="600519")
+        if "stock_code" not in st.session_state:
+            st.session_state.stock_code = "600519"
+        if "watchlist" not in st.session_state:
+            st.session_state.watchlist = []
+        stock_code = st.text_input("股票代码", key="stock_code")
         industry_keywords = st.text_input("行业关键词（可选）", placeholder="如：白酒、酿酒")
         start_date = st.date_input("开始日期", value=datetime.date(2023, 1, 1))
         analyze = st.button("开始分析", type="primary", use_container_width=True)
+
         st.divider()
+        st.subheader("⭐ 自选股")
+        add_code = st.text_input("加入代码", placeholder="如 600519")
+        if st.button("➕ 加入自选股", use_container_width=True):
+            code = add_code.strip()
+            if code and code not in st.session_state.watchlist:
+                st.session_state.watchlist.append(code)
+                st.rerun()
+        if st.session_state.watchlist:
+            for code in list(st.session_state.watchlist):
+                c1, c2 = st.columns([3, 1])
+                c1.button(code, key=f"pick_{code}", use_container_width=True,
+                          on_click=_pick_stock, args=(code,))
+                c2.button("✕", key=f"del_{code}", use_container_width=True,
+                          on_click=_remove_stock, args=(code,))
         st.caption("数据来自 AkShare（新浪/雪球等），网络不稳时可能偶尔失败。")
     # ---- 两个标签页 ----
-    tab1, tab2 = st.tabs(["🔍 单股分析", "🚀 智能选股"])
+    tab1, tab2, tab3 = st.tabs(["🔍 单股分析", "🚀 智能选股", "📈 历史回测"])
 
     # ============ 标签 1：单股分析 ============
     with tab1:
@@ -651,6 +712,36 @@ def main():
                     st.divider()
             else:
                 st.warning("没有找到符合条件的股票，或网络请求失败，请稍后再试。")
+    # ============ 标签 3：历史回测 ============
+    with tab3:
+        st.subheader("📈 历史回测")
+        st.caption("用「MA5 上穿 MA20 金叉买入、死叉卖出」的简单策略回测历史（仅供学习）。")
 
+        if st.button("开始回测", type="primary"):
+            start_str = start_date.strftime("%Y%m%d")
+            end_str = datetime.date.today().strftime("%Y%m%d")
+            with st.spinner("正在回测……"):
+                df = fetch_stock_data(stock_code, start_str, end_str)
+            if df is None or df.empty:
+                st.error("历史数据获取失败，请稍后重试。")
+            else:
+                df = add_indicators(df)
+                bt, golden_cnt, dead_cnt = backtest(df)
+
+                strategy_total = bt["strategy_cum"].iloc[-1] - 1
+                hold_total = bt["hold_cum"].iloc[-1] - 1
+                c1, c2, c3 = st.columns(3)
+                c1.metric("策略总收益", f"{strategy_total*100:.1f}%")
+                c2.metric("买入持有收益", f"{hold_total*100:.1f}%")
+                c3.metric("金叉次数", f"{golden_cnt} 次")
+
+                fig, ax = plt.subplots(figsize=(12, 5))
+                ax.plot(bt["date"], bt["strategy_cum"], label="均线策略", linewidth=1.5)
+                ax.plot(bt["date"], bt["hold_cum"], label="买入持有", linewidth=1.5, alpha=0.7)
+                ax.set_title(f"{stock_code} 均线策略回测")
+                ax.legend()
+                ax.grid(alpha=0.3)
+                st.pyplot(fig)
+                st.caption("说明：纵轴是累计净值（1.0=不赚不赔）。策略线高于买入持有线，说明策略跑赢了「拿着不动」。")
 
 main()
